@@ -1,0 +1,32 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{Abstract}{1}{Doc-Start}%
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Background and motivation}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Problem statement}{1}{subsection.1.2}%
+\contentsline {section}{\numberline {2}Aim, Objectives, and Research Questions}{2}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Aim}{2}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Objectives}{2}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Research questions}{2}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Scope and Delimitations}{3}{section.3}%
+\contentsline {section}{\numberline {4}Data Plan}{3}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Candidate data sources}{3}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Manual collection from job boards}{5}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Project fields}{7}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Data preparation}{7}{subsection.4.4}%
+\contentsline {section}{\numberline {5}Methodology}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Pipeline overview}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}IT and BA job-family identification}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Skill vocabulary and annotation}{8}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Skill extraction models}{9}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}Evaluation of extraction}{9}{subsection.5.5}%
+\contentsline {subsection}{\numberline {5.6}Prevalence and co-occurrence analysis}{9}{subsection.5.6}%
+\contentsline {subsection}{\numberline {5.7}Baselines and robustness checks}{10}{subsection.5.7}%
+\contentsline {section}{\numberline {6}Success Criteria}{10}{section.6}%
+\contentsline {section}{\numberline {7}Ethics and Responsible Interpretation}{10}{section.7}%
+\contentsline {section}{\numberline {8}Tools and Implementation}{10}{section.8}%
+\contentsline {section}{\numberline {9}Work Plan}{11}{section.9}%
+\contentsline {section}{\numberline {10}Division of Work}{12}{section.10}%
+\contentsline {section}{\numberline {11}Risks and Mitigation}{13}{section.11}%
+\contentsline {section}{\numberline {12}Expected Deliverables}{13}{section.12}%
+\contentsline {section}{\numberline {13}Conclusion}{13}{section.13}%
+\contentsline {section}{References}{14}{section.13}%
