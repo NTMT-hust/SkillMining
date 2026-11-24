@@ -44,6 +44,7 @@
 \newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
 \setlist{nosep,leftmargin=1.5em}
 \captionsetup{font=small,labelfont=bf}
+\hfuzz=16pt   % suppress minor table-cell overfull warnings
 
 \titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
 \titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.6em}{}
@@ -167,9 +168,13 @@ skill names, and analyzes skill prevalence and co-occurrence by role,
 location, and period (target window 2020--2025, subject to verified data
 coverage).
 
-Skills will be extracted with an interpretable bilingual dictionary baseline
-and compared with a PhoBERT-based sequence-labeling model; a manually
-annotated gold sample will be used to measure precision, recall, and F1. The
+Skill extraction is framed as a sequence-labeling task (input: a posting
+sentence; output: BIO tags marking skill spans). An interpretable bilingual
+dictionary matcher and a CRF serve as baselines for a fine-tuned PhoBERT
+token classifier (deep learning). Models are evaluated with span-level
+precision, recall, and F1 on a manually annotated Vietnamese gold set, and
+the implementation is checked on the public SkillSpan
+benchmark~\cite{skillspan}. The
 normalized skills will then be summarized as posting-level prevalence and as
 separate IT and BA skill co-occurrence networks. Deliverables include a
 cleaned analysis dataset, a versioned skill vocabulary, extraction and
@@ -181,7 +186,7 @@ labor market.
 extraction, job postings, co-occurrence network, PhoBERT, Vietnam.
 
 % ============================ 1. INTRODUCTION ========================
-\section{Introduction}
+\section{Introduction}\label{sec:intro}
 
 \subsection{Background and motivation}
 Online job advertisements are a rich source of evidence about how employers
@@ -206,6 +211,69 @@ be misleading. This project assesses whether a practical extraction and
 normalization pipeline can produce sufficiently accurate skill data for
 descriptive analysis of Vietnamese IT and BA postings, and uses that data to
 show how skill combinations differ across job families.
+
+The project follows the course's \emph{academic} approach and belongs to
+the Information Extraction part of the course, with a link-analysis
+component (skill co-occurrence networks). The proposal covers problem
+definition (Section~\ref{sec:intro}), methods
+(Section~\ref{sec:methods}), datasets (Section~\ref{sec:data}),
+implementation (Section~\ref{sec:tools}), and performance reporting
+(Section~\ref{sec:perf}).
+
+\subsection{Task definition: inputs and outputs}\label{sec:taskdef}
+The project is decomposed into four well-defined tasks.
+Table~\ref{tab:tasks} states the input and output of each; Task~T2 is the
+core research task.
+
+\begin{table}[H]
+\centering\small
+\caption{Task definitions}
+\label{tab:tasks}
+\begin{tabularx}{\textwidth}{@{}P{2.6cm}P{3.4cm}P{3.4cm}L@{}}
+\toprule
+\textbf{Task} & \textbf{Input} & \textbf{Output} & \textbf{Example} \\
+\midrule
+T1. Job-family classif. & Posting title + description $x$ &
+  Label $y \in \{\text{IT}, \text{BA}, \text{Other}\}$ &
+  ``Senior Business Analyst'' $\rightarrow$ BA \\
+\addlinespace
+T2. Skill span extraction (main) & Token sequence
+  $w_1,\!\dots,\!w_n$ &
+  BIO tags $t_i \!\in\! \{\texttt{B},\texttt{I},\texttt{O}\}$ &
+  ``SQL/B và/O Power/B BI/I'' \\
+\addlinespace
+T3. Skill normalization & Span string $s$ &
+  Canonical skill $c$ or \textsc{unk} &
+  ``JS'' $\rightarrow$ JavaScript \\
+\addlinespace
+T4. Demand mining & Postings with skill sets $S(d)$, role,
+  location, date &
+  Prevalence tables; graph $G\!=\!(V,E,w)$ &
+  ``SQL in 41\% of BA postings'' \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Challenges}
+\begin{itemize}
+  \item \textbf{Code-switching:} Vietnamese sentences routinely embed English
+        technical terms (``Có kinh nghiệm với Docker, Kubernetes''), so
+        neither a Vietnamese-only nor an English-only model fits perfectly.
+  \item \textbf{Word segmentation:} Vietnamese words span several
+        syllables (\emph{phân tích nghiệp vụ}); PhoBERT expects
+        word-segmented input, and segmentation errors move span boundaries.
+  \item \textbf{Aliases and ambiguity:} one skill has many surface forms
+        (JS, Javascript), and some forms are ambiguous (``BA'' as a role or
+        a skill; ``Java'' versus ``JavaScript''; ``Agile'' as a method or an
+        adjective).
+  \item \textbf{Span boundaries:} long or coordinated mentions (``thiết
+        kế và tối ưu cơ sở dữ liệu'') and lists make exact boundaries hard
+        to agree on.
+  \item \textbf{Limited labeled data:} no public Vietnamese skill-span
+        dataset exists, so the gold set must be annotated by the team.
+  \item \textbf{Noisy and imbalanced web data:} reposts, templated text, and
+        few BA postings relative to IT and non-IT postings.
+\end{itemize}
 
 % ============================ 2. AIM / OBJECTIVES / RQ ================
 \section{Aim, Objectives, and Research Questions}
@@ -272,7 +340,7 @@ not forecast future employment outcomes.
 \end{itemize}
 
 % ============================ 4. DATA PLAN ===========================
-\section{Data Plan}
+\section{Data Plan}\label{sec:data}
 This is just the draft we made, after trying this approch, we may alter it.
 \subsection{Candidate data sources}
 Table~\ref{tab:sources} lists the candidate sources. A dataset is not
@@ -290,15 +358,20 @@ fallback for a recent snapshot.
 \toprule
 \textbf{Source} & \textbf{Potential use} & \textbf{Checks / limitations} \\
 \midrule
-VietJobs dataset~\cite{vietjobs} & Primary candidate; reported 48{,}092
-  Vietnamese job ads with title, category, salary, and skill fields &
-  Confirm release location, license, date range, duplicate policy, and
-  availability of full descriptions \\
+VietJobs dataset~\cite{vietjobs} & Primary candidate; 48{,}092
+  Vietnamese job ads from all 34 provinces, with title, category,
+  salary, skills, and employment-condition fields. Released under
+  MIT License at GitHub/HuggingFace &
+  Coverage is July--October 2025 only (not historical); confirm
+  field availability; no year-on-year trends from this source alone \\
 \addlinespace
-VietJobs-37K / VieJobBERT~\cite{viejobbert} & Role-classification
-  benchmark and supplementary Vietnamese text (37{,}274 postings, 60
-  occupation labels) & Not designed as a longitudinal skills dataset; check
-  Zenodo license and fields; silver labels are keyword-derived \\
+VietJobs-37K / VieJobBERT~\cite{viejobbert} & Occupation-classification
+  benchmark; 37{,}274 Vietnamese-dominant postings with 60 labels in
+  12 macro groups. Published in IEEE Access 2026, dataset on Zenodo
+  (DOI 10.5281/zenodo.20472202) under CC BY-NC 4.0 &
+  Designed for occupation labeling, not longitudinal skill demand;
+  silver labels are keyword-derived; training on public text may not
+  reproduce archival scores; check Zenodo license before redistribution \\
 \addlinespace
 Techmap / JobDataFeeds~\cite{techmap} & Historical postings since January
   2020 with title, description, location, skills & Paid product; confirm
@@ -329,12 +402,11 @@ LinkedIn (optional, manual only) & Small validation sample of
 \end{tabularx}
 \end{table}
 
-\textbf{Selection sequence.} (1) Ask the supervisor or library for an
-existing permitted archive; (2) inspect the VietJobs and VietJobs-37K
-releases and terms; (3) request a sample and academic terms from the
-commercial provider if budget allows; (4) in parallel, run the manual
+\textbf{Selection sequence.} (1) inspect the VietJobs and VietJobs-37K
+releases and terms; (2) request a sample and academic terms from the
+commercial provider if budget allows; (3) in parallel, run the manual
 collection of Section~\ref{sec:manual} for a recent snapshot from boards
-whose terms allow it; (5) otherwise narrow the period to a source that can
+whose terms allow it; (4) otherwise narrow the period to a source that can
 be accessed lawfully. Sources will not be merged until their fields, dates,
 and collection methods are comparable.
 
@@ -460,7 +532,7 @@ Salary (optional) & Descriptive only & Used only if period and currency are expl
 \end{enumerate}
 
 % ============================ 5. METHODOLOGY =========================
-\section{Methodology}
+\section{Methodology}\label{sec:methods}
 
 \subsection{Pipeline overview}
 Figure~\ref{fig:pipeline} summarizes the proposed pipeline. Occupation
@@ -496,6 +568,22 @@ that each can be evaluated independently.
 \label{fig:pipeline}
 \end{figure}
 
+\subsection{Benchmark datasets}\label{sec:benchmarks-sub}
+Two datasets anchor the evaluation.
+
+\textbf{Vietnamese gold set (primary).} A stratified sample of postings
+from the project corpus annotated by the team for skill spans (BIO
+format). This is the main evaluation set because no public
+Vietnamese skill-extraction dataset exists.
+
+\textbf{SkillSpan~\cite{skillspan} (secondary sanity check).}
+A public English skill-span dataset of 14.5K sentences and over 12.5K
+annotated spans from job postings (NAACL 2022, available at
+\url{https://github.com/kris927b/skillspan}). Running the PhoBERT/XLM-R
+model on SkillSpan's test split verifies that the implementation is correct
+before applying it to Vietnamese. Results on SkillSpan are reported
+separately and are not used to tune any Vietnamese-specific decisions.
+
 \subsection{IT and BA job-family identification}
 A title taxonomy with aliases will be drafted, including rules for ambiguous
 roles (e.g.\ \emph{Data Analyst} is not automatically a BA role). A stratified
@@ -520,32 +608,147 @@ between required and preferred skills. A stratified sample (by role, period,
 and language) will be annotated, with a double-labeled subset used to report
 inter-annotator agreement.
 
-\subsection{Skill extraction models}
+\subsection{Skill extraction models}\label{sec:models}
 
+The task is framed as BIO sequence labeling: every token in a posting
+description is tagged as the beginning of a skill span (\texttt{B-SKILL}),
+inside one (\texttt{I-SKILL}), or outside (\texttt{O}). We compare four
+tiers of models (interpretable baseline $\to$ statistical $\to$
+deep-learning $\to$ span-based) so that each contributes a distinct
+research comparison. The selection rationale for each tier is given below
+and summarised in Table~\ref{tab:models}.
+
+\paragraph{M1 — Dictionary / phrase matching (interpretable baseline).}
+A curated bilingual vocabulary of canonical skill labels and their aliases
+is matched against posting text using boundary-aware regular expressions.
+This approach is chosen because it is fully transparent (every extraction
+can be explained by the matched rule), requires no training data, and
+gives a reproducible lower bound against which all learned models are
+measured. Its main weakness is that it cannot generalize to unseen surface
+forms. Equivalent to the dictionary baseline used in SkillSpan
+\cite{skillspan}.
+
+\paragraph{M2 — BiLSTM-CRF (statistical deep-learning baseline).}
+A bidirectional Long Short-Term Memory network with a Conditional Random
+Field decoding layer. Inputs are word embeddings (fastText vectors trained
+on Vietnamese text) concatenated with character-level CNN features. This
+model is included because (a) it is the standard pre-transformer sequence
+labeling architecture, (b) it handles word-boundary patterns well through
+the character CNN, and (c) its performance on Vietnamese NER is documented,
+providing a fair intermediate comparison point between the rule baseline
+and the transformer models \cite{phobert}. A CRF-only variant (no LSTM,
+logistic-regression-style features) is run as a lighter check.
+
+\paragraph{M3 — PhoBERT-v2 token classification (primary deep-learning model).}
+PhoBERT~\cite{phobert} is a RoBERTa-style model pre-trained on 20\,GB of
+Vietnamese text from Wikipedia and a news corpus. Version~2 extends
+pre-training data and further optimizes the training procedure, making it
+the state-of-the-art encoder for Vietnamese NLP tasks including NER and
+POS tagging. We fine-tune the VinAI checkpoint
+\texttt{phobert-base-v2} with a linear token-classification head for BIO
+tagging. This model is the primary choice
+because:
+\begin{itemize}
+  \item Vietnamese is the dominant language in the posting corpus; a
+        language-specific pre-trained model captures subword tokenization
+        suited to Vietnamese syllable structure.
+  \item It outperforms multilingual baselines (XLM-R) on Vietnamese NER
+        benchmarks.
+  \item PhoBERT-based classifiers have been successfully applied to
+        Vietnamese token classification tasks including skills-adjacent
+        domains \cite{phobert}.
+  \item The model size (base: 135M parameters) is feasible on a
+        free-tier GPU (Google Colab), which is required by the course
+        evaluation criteria.
+\end{itemize}
+
+\paragraph{M4 — XLM-RoBERTa large token classification (multilingual
+comparison).}
+XLM-R~\cite{xlmr} is pre-trained on 2.5\,TB of filtered Common Crawl
+data in 100 languages, including Vietnamese. We fine-tune
+\texttt{xlm-roberta-large} with the same BIO head as M3. This model
+is included because a substantial share of Vietnamese IT and BA postings
+contains English technical terms (frameworks, tool names, certification
+codes) embedded in otherwise Vietnamese sentences. For such mixed-language
+text, a model with multilingual subword vocabulary may tokenize English
+tokens more cleanly than PhoBERT. Results from M4 versus M3 directly test
+whether the Vietnamese-specific pre-training advantage outweighs the
+multilingual vocabulary advantage for this bilingual domain. ESCOXLM-R
+\cite{escoxlmr} — XLM-R further pre-trained on ESCO taxonomy text — is
+listed as an optional extension: it achieved state-of-the-art results on
+6 out of 9 job-market sequence-labeling benchmarks, performing especially
+well on short skill spans \cite{escoxlmr}, but requires additional
+pre-training compute and is therefore deferred to the extension tier.
+
+\paragraph{M5 — GLiNER span-based NER (optional zero-shot probe).}
+GLiNER (Generalist and Lightweight model for NER, NAACL 2024)
+\cite{gliner} uses a BERT-like encoder to score candidate spans against
+natural-language entity-type labels, enabling zero-shot extraction without
+any BIO training data. We include a read-only probe of a pretrained
+GLiNER checkpoint (prompted with the label ``skill'') as an upper-bound
+reference for zero-shot capability. This tests whether the annotation
+effort is justified: if a zero-shot model approaches the supervised
+baseline, the team will reconsider the annotation budget. GLiNER will not
+be fine-tuned (no labeled Vietnamese spans available at the checkpoint
+stage) and its results will be reported separately from the supervised
+models to avoid conflating training-data costs.
+
+\vspace{4pt}
+{\hbadness=10000\hfuzz=16pt
 \begin{table}[H]
 \centering\small
-\caption{Extraction approaches compared}
+\caption{Model comparison plan}
 \label{tab:models}
-\begin{tabularx}{\textwidth}{@{}P{3.6cm}P{2.6cm}L@{}}
+\begin{tabularx}{\textwidth}{@{}P{0.4cm}P{3.0cm}P{2.3cm}LL@{}}
 \toprule
-\textbf{Approach} & \textbf{Role} & \textbf{Notes} \\
+\textbf{\#} & \textbf{Model} & \textbf{Tier / role} &
+  \textbf{Key motivation} & \textbf{Training data needed} \\
 \midrule
-Dictionary / phrase matching & Required baseline & Boundary-aware,
-  interpretable, easy to audit; misses unseen forms \\
-PhoBERT token classification (BIO) & Main neural model & Context-sensitive
-  Vietnamese representation~\cite{phobert}; predicts exact spans \\
-XLM-R token classification & Optional & For substantially mixed
-  Vietnamese--English text~\cite{xlmr} \\
-CRF / BiLSTM-CRF & Optional & Traditional sequence-labeling comparison \\
-Embedding-based linking & Optional & Suggests canonical labels for unseen
-  phrases; always manually validated \\
+M1 & Dictionary matcher &
+  Interpretable baseline &
+  Transparent, auditable; lower bound for all models &
+  None (uses skill vocabulary) \\
+\addlinespace
+M2 & BiLSTM-CRF (fastText embeds) &
+  Statistical deep-learning baseline &
+  Standard pre-transformer NER; documents value of transformers &
+  Gold annotated spans \\
+\addlinespace
+M3 & PhoBERT-v2~\cite{phobert} + BIO head &
+  \textbf{Primary DL model} &
+  SOTA Vietnamese encoder; optimal for mono/bilingual Vietnamese text;
+  fits free-tier GPU &
+  Gold annotated spans \\
+\addlinespace
+M4 & XLM-R large~\cite{xlmr} + BIO head &
+  Multilingual comparison &
+  Tests whether multilingual vocab helps for English-heavy postings; well
+  documented on SkillSpan~\cite{skillspan} &
+  Gold annotated spans \\
+\addlinespace
+M5 & GLiNER~\cite{gliner} (zero-shot probe) &
+  Optional zero-shot reference &
+  Tests annotation cost--benefit; no fine-tuning needed &
+  None (zero-shot) \\
+\addlinespace
+(ext.) & ESCOXLM-R~\cite{escoxlmr} &
+  Optional extension &
+  ESCO-domain pre-training; SOTA on 6/9 job-market benchmarks; better on
+  short skill spans &
+  Gold annotated spans \\
 \bottomrule
 \end{tabularx}
 \end{table}
+}
 
-Data are split by posting, keeping likely duplicates in the same split; if
-the sample allows, the latest year is reserved as a temporal test set. The
-untouched test set is used only for final reporting.
+\textbf{Training and evaluation protocol.}
+Data are split by posting so that likely reposts stay in the same fold.
+Where the sample allows, the most recent quarter is reserved as a temporal
+held-out test set; otherwise a stratified 70/15/15 posting-level split is
+used. All supervised models use the same split and the same annotation
+set. The untouched test set is used only once, for final reporting.
+Hyperparameters (learning rate, batch size, maximum sequence length) are
+selected on the development set. Random seeds are fixed and logged.
 
 \subsection{Evaluation of extraction}
 Let $TP$, $FP$, and $FN$ denote true positives, false positives, and false
@@ -588,7 +791,7 @@ aggregated by year or quarter and always shown with their denominators.
 \end{itemize}
 
 % ============================ 6. EVALUATION CRITERIA =================
-\section{Success Criteria}
+\section{Success Criteria and Performance Reporting}\label{sec:perf}
 The project will be considered successful if it:
 \begin{enumerate}
   \item produces a traceable, documented mapping from surface forms to
@@ -619,7 +822,7 @@ reported and the analysis narrowed to reliably extracted skill groups.
 \end{itemize}
 
 % ============================ 8. TOOLS ===============================
-\section{Tools and Implementation}
+\section{Tools and Implementation}\label{sec:tools}
 Python with \texttt{pandas} (data preparation), regular expressions or a
 phrase matcher (dictionary baseline), Hugging Face \texttt{transformers}
 (PhoBERT/XLM-R), \texttt{scikit-learn} (classifiers and metrics),
@@ -755,13 +958,40 @@ semester while still producing measurable results.
 \begin{thebibliography}{9}
 \addcontentsline{toc}{section}{References}
 
+\bibitem{gliner}
+A.~Zaratiana, N.~Tomeh, P.~Holat, and T.~Charnois.
+GLiNER: Generalist and lightweight model for named entity recognition.
+In \emph{Proceedings of the 2024 Conference of the North American Chapter
+of the Association for Computational Linguistics (NAACL)},
+pp.~5364--5376, 2024.
+\url{https://github.com/urchade/GLiNER}
+
+\bibitem{escoxlmr}
+M.~Zhang, R.~van~der~Goot, and B.~Plank.
+Multilingual taxonomy-driven pre-training for the job market domain.
+In \emph{Findings of the ACL 2023}, 2023.
+\url{https://arxiv.org/abs/2305.12092}
+
+\bibitem{skillspan}
+M.~Zhang, K.~N.~Jensen, S.~D.~Sonniks, and B.~Plank.
+SkillSpan: Hard and soft skill extraction from English job postings.
+In \emph{Proceedings of the 2022 Conference of the North American Chapter
+of the Association for Computational Linguistics (NAACL)},
+pp.~4962--4984, 2022.
+\url{https://aclanthology.org/2022.naacl-main.366}
+
 \bibitem{vietjobs}
-\emph{VietJobs: A Vietnamese Job Advertisement Dataset}.
-arXiv preprint arXiv:2603.05262.
-\url{https://arxiv.org/abs/2603.05262}
+H.~Pham-Dinh, H.~N.~Huy, and M.~El-Haj.
+VietJobs: A Vietnamese job advertisement dataset.
+In \emph{Language Resources and Evaluation Conference (LREC-COLING) 2026},
+arXiv:2603.05262.
+\url{https://github.com/VinNLP/VietJobs}
 
 \bibitem{viejobbert}
-KALD Labs. \emph{VieJobBERT: VietJobs-37K dataset and benchmark code}.
+L.~A.~K. Do, T.~A. Nguyen, T.~T. Tran, N.~Q.~B. Vo, and H.~T. Ngo.
+VietJobs-37K and VieJobBERT: A Vietnamese multi-label occupation
+classification dataset and multi-seed PhoBERT-v2 reference benchmark.
+\emph{IEEE Access}, vol.~14, pp.~119006--119026, 2026.
 \url{https://github.com/kaldlabs/VieJobBERT}
 
 \bibitem{techmap}
