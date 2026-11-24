@@ -23,11 +23,14 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_ROOT = PROJECT_ROOT / "data" / "raw"
+DEFAULT_RAW_ROOTS = [PROJECT_ROOT / "data" / "raw"]
+# Some downloaded datasets are split into folders such as
+# data/raw-<archive-id>-001/raw and ...-002/raw. Use all parts by default.
+if not DEFAULT_RAW_ROOTS[0].exists():
+    DEFAULT_RAW_ROOTS = sorted(PROJECT_ROOT.glob("data/raw-*/raw"))
 OUTPUT_ROOT = PROJECT_ROOT / "data" / "processed"
 
 VOID_TAGS = {
@@ -123,10 +126,9 @@ def walk(node: Node) -> Iterable[Node]:
             yield from walk(child)
 
 
-def container_score(node: Node) -> int:
+def container_score(node: Node, text: str) -> int:
     if node.tag in IGNORED_TAGS:
         return -1
-    text = node_text(node)
     if len(text) < 160:
         return -1
     hints = " ".join((node.attrs.get("class", ""), node.attrs.get("id", ""))).lower()
@@ -145,8 +147,24 @@ def best_job_text(root: Node) -> str:
     candidates = [n for n in walk(root) if n.tag in {"main", "article", "section", "div"}]
     if not candidates:
         return node_text(root)
-    winner = max(candidates, key=container_score)
-    text = node_text(winner)
+    # Build visible text for each node once. Recomputing descendant text for
+    # every nested div made large pages needlessly quadratic to process.
+    text_by_node: dict[int, str] = {}
+
+    def collect(node: Node) -> str:
+        if node.tag in IGNORED_TAGS:
+            text_by_node[id(node)] = ""
+            return ""
+        parts: list[str] = []
+        for child in node.children:
+            parts.append(clean_text(child) if isinstance(child, str) else collect(child))
+        value = clean_text(" ".join(part for part in parts if part))
+        text_by_node[id(node)] = value
+        return value
+
+    collect(root)
+    winner = max(candidates, key=lambda n: container_score(n, text_by_node.get(id(n), "")))
+    text = text_by_node.get(id(winner), "")
     # On some static pages a generic main element wins but contains only a
     # short shell. Fall back to all visible body text in that case.
     return text if len(text) >= 250 else node_text(root)
@@ -278,7 +296,7 @@ def read_fetch_logs(batch_dir: Path) -> dict[str, dict[str, str]]:
     return result
 
 
-def source_for(path: Path, raw_root: Path = RAW_ROOT) -> str:
+def source_for(path: Path, raw_root: Path) -> str:
     # Expected layout: data/raw/<source>/archive/census/<batch>/<page>.html
     relative = path.relative_to(raw_root)
     return relative.parts[0] if relative.parts else "unknown"
@@ -288,7 +306,7 @@ def make_record(
     path: Path,
     index: dict[str, str],
     log: dict[str, str],
-    raw_root: Path = RAW_ROOT,
+    raw_root: Path,
 ) -> dict[str, str]:
     job_id = path.stem
     fields = parse_page(path)
@@ -330,28 +348,34 @@ def write_csv(path: Path, rows: list[dict[str, str]], fields: list[str]) -> None
         writer.writerows(rows)
 
 
-def extract(raw_root: Path, output_root: Path, sources: list[str]) -> tuple[int, int]:
+def extract(raw_roots: list[Path], output_root: Path, sources: list[str]) -> tuple[int, int]:
     postings: list[dict[str, str]] = []
-    for source in sources:
-        source_root = raw_root / source
-        if not source_root.exists():
-            print(f"Skip missing source folder: {source_root}")
-            continue
-        # Read each batch's metadata once instead of reopening a large index
-        # file for every individual HTML page.
-        for batch_dir in sorted(p for p in source_root.rglob("*") if p.is_dir()):
-            html_files = sorted(batch_dir.glob("*.html"))
-            if not html_files:
+    seen: set[tuple[str, str]] = set()
+    for raw_root in raw_roots:
+        for source in sources:
+            source_root = raw_root / source
+            if not source_root.exists():
+                print(f"Skip missing source folder: {source_root}")
                 continue
-            indexes = read_indexes(batch_dir)
-            logs = read_fetch_logs(batch_dir)
-            for html_path in html_files:
-                postings.append(make_record(
-                    html_path,
-                    indexes.get(html_path.stem, {}),
-                    logs.get(html_path.stem, {}),
-                    raw_root,
-                ))
+            # Read each batch's metadata once instead of reopening a large index
+            # file for every individual HTML page.
+            for batch_dir in sorted(p for p in source_root.rglob("*") if p.is_dir()):
+                html_files = sorted(batch_dir.glob("*.html"))
+                if not html_files:
+                    continue
+                indexes = read_indexes(batch_dir)
+                logs = read_fetch_logs(batch_dir)
+                for html_path in html_files:
+                    identity = (source, html_path.stem)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    postings.append(make_record(
+                        html_path,
+                        indexes.get(html_path.stem, {}),
+                        logs.get(html_path.stem, {}),
+                        raw_root,
+                    ))
 
     postings_path = output_root / "postings.csv"
     audit_path = output_root / "extraction_audit.csv"
@@ -366,14 +390,14 @@ def extract(raw_root: Path, output_root: Path, sources: list[str]) -> tuple[int,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--raw", type=Path, default=RAW_ROOT,
-                        help=f"raw data folder (default: {RAW_ROOT})")
+    parser.add_argument("--raw", type=Path, nargs="+", default=DEFAULT_RAW_ROOTS,
+                        help="one or more raw folders; defaults to data/raw or all data/raw-*/raw folders")
     parser.add_argument("--output", type=Path, default=OUTPUT_ROOT,
                         help=f"output folder (default: {OUTPUT_ROOT})")
     parser.add_argument("--sources", nargs="+", default=["itviec", "topdev"],
                         help="source folder names to process")
     args = parser.parse_args()
-    extract(args.raw.resolve(), args.output.resolve(), args.sources)
+    extract([p.resolve() for p in args.raw], args.output.resolve(), args.sources)
 
 
 if __name__ == "__main__":
